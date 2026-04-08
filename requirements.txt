@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+prometheus-client
+pdfplumber
+pandas
+pyyaml
+python-dateutil
+scikit-learn
+joblib

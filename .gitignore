@@ -1,0 +1,9 @@
+.env
+data/
+setup/
+*.db
+__pycache__/
+.venv/
+node_modules/
+frontend/node_modules/
+setup/config.env

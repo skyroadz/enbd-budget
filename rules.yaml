@@ -1,0 +1,354 @@
+defaults:
+  currency: "AED"
+
+# ---------------------------------------------------------------------------
+# IGNORE
+# Raw description substrings that should be skipped entirely (not transactions).
+# ---------------------------------------------------------------------------
+ignore_descriptions:
+  - "PAYMENT RECEIVED"
+  - "BALANCE FORWARD"
+
+
+# ---------------------------------------------------------------------------
+# MERCHANT CLEANUP
+# Applied to raw description before alias matching.
+# ---------------------------------------------------------------------------
+merchant_cleanup:
+  strip_prefixes:
+    - "POS*"
+    - "GEIDEA*"
+    - "SQ *"            # Square POS with space (e.g. "SQ *RAIN OR SHINE...")
+    - "SQ*"             # Square POS without space (e.g. "SQ*WAGYURAMEN...")
+    - "TST-"            # Toast POS prefix (e.g. TST-CAZBA...)
+    - "MAMO*"           # MAMO payment prefix
+    - "*"
+
+  strip_trailing_tokens:
+    - "DUBAI ARE"
+    - "DUBAI AE"
+    - "ABU DHABI ARE"
+    - "ARE"
+    - "AE"
+
+  remove_regex:
+    # Remove amounts like "1,572.00 JPY" or "43.99" at end
+    - '\s+\d{1,3}(?:,\d{3})*(?:\.\d{2})\s+[A-Z]{3}$'
+    - '\s+\d{1,3}(?:,\d{3})*(?:\.\d{2})$'
+
+    # Collapse web domains: "WWW.SHEIN.COM" -> "SHEIN"  (dots already replaced with spaces by app.py)
+    - '^WWW '
+    - ' (COM|AE|CO)$'
+
+    # Remove trailing single letter (e.g. "RAIN OR SHINE HOME VANCOUVER C" -> trim the "C")
+    - '\s+[A-Z]$'
+
+    # Strip common legal entity suffixes BEFORE city+country so that e.g.
+    # "Q MOBILITY LLC" -> "Q MOBILITY" rather than being mis-parsed as city+country noise.
+    - '\s+(LLC|LTD|DMCC|FZE|FZC|PLC|INC|CORP)$'
+
+    # Remove trailing city+country noise like "NOMANI SHARJAH", "BURNABY CAN", "TOKYO JPN"
+    # Last token must be 2-3 chars (country/emirate code), preceded by a city name of 3+ chars.
+    # Keep at 2-3 to avoid eating legitimate 4-6 char words that are part of the merchant name
+    # (e.g. "BEAR" in "PULL AND BEAR", "DUBAI" when it's part of a brand name).
+    - '\s+[A-Z]{3,}\s+[A-Z]{2,3}$'
+
+    # Remove "QLUB" venue aggregator suffix
+    - '\s*QLUB$'
+
+    # Remove store/branch IDs like "#2978", "3C", "W548"
+    - '\s+#?\d+[A-Z]?$'
+    - '\s+[A-Z]\d+$'
+
+    # Remove repeated whitespace
+    - '\s{2,}'
+
+
+# ---------------------------------------------------------------------------
+# MERCHANT ALIASES
+# Run AFTER cleanup, BEFORE categorization.
+# Purpose: normalize noisy/variant raw strings to a single canonical name.
+#
+# GUIDELINE: Only add an alias when the raw string after cleanup would NOT
+# already match the canonical name as a substring. Many single-brand aliases
+# like "^ADNOC\b.*" -> "ADNOC" are unnecessary because cleanup already
+# produces "ADNOC" and categories[] substring-matches it directly.
+# ---------------------------------------------------------------------------
+merchant_aliases:
+  # --- Carrefour variants ---
+  - match: '^CARREFOUR'
+    canonical: 'CARREFOUR'
+
+  # --- Lulu variants ---
+  - match: '^LULU'
+    canonical: 'LULU'
+
+  # --- Careem sub-brand splits (must come before bare CAREEM) ---
+  - match: '^CAREEM\s+(HALA|HALA\s+RIDE)$'
+    canonical: 'CAREEM HALA'
+  - match: '^CAREEM\s+RIDE$'
+    canonical: 'CAREEM RIDE'
+  - match: '^CAREEM\s+FOOD$'
+    canonical: 'CAREEM FOOD'
+  - match: '^CAREEM\s+DELIVERIES'
+    canonical: 'CAREEM DELIVERIES'
+  - match: '^CAREEM\s+PAY\s+TOPUP'
+    canonical: 'CAREEM PAY TOPUP'
+  - match: '^CAREEM\s+PLUS'
+    canonical: 'CAREEM PLUS'
+
+  # --- Amazon sub-brand split (PRIME before generic AMAZON) ---
+  - match: '^AMAZON\s+PRIME'
+    canonical: 'AMAZON PRIME'
+  - match: '^AMAZON(\s+(RETAIL|GROCERY|AE))?$'
+    canonical: 'AMAZON'
+
+  # --- Online merchant domain noise ---
+  - match: '^NOON(\.COM)?$'
+    canonical: 'NOON'
+  - match: '^SHEIN(\.COM)?$'
+    canonical: 'SHEIN'
+
+  # --- Costa Coffee (appears as "COSTA ...", "EMIRATES LEISURE ...") ---
+  - match: '^COSTA\b'
+    canonical: 'COSTA COFFEE'
+  - match: '^EMIRATES\s+LEIS'
+    canonical: 'COSTA COFFEE'
+
+  # --- Emirates Flight Catering — normalise both truncated and full-word forms
+  # so that "RING" pattern in subscriptions doesn't fire on "cateRING"
+  - match: '^EMIRATES\s+FLIGHT\s+CATERI'
+    canonical: 'EMIRATES FLIGHT CATERING'
+
+  # --- Reel Entertainment variants ---
+  - match: '^REEL(\s+(ENTERTAINMENT|CINEMA))?\b'
+    canonical: 'REEL ENTERTAINMENT'
+
+  # --- Clean Bubbles Laundry variants ---
+  - match: '^(CLEAN\s*BUBBLES|CLEANLINE)\b'
+    canonical: 'CLEAN BUBBLES LAUNDRY'
+
+  # --- Telecom (raw strings are noisy) ---
+  - match: '^DUBAI\s+ELECTRICITY\b'
+    canonical: 'DEWA'
+  - match: '^ONLINE\s+BILL\s+PYMT\s+DEWA\b'
+    canonical: 'DEWA'
+  - match: '^DU\b'
+    canonical: 'DU'
+  - match: '^ETISALAT\b'
+    canonical: 'ETISALAT'
+
+  # --- Fuel (prefix variants) ---
+  - match: '^EPPCO?\b'
+    canonical: 'EPPCO'
+
+  # --- Airlines (noisy prefixes and ticket number suffixes) ---
+  # Raw: "AIR CAN* 0142120655270 AIRCANADA.C" — after cleanup still has ticket number
+  # The categories[] "AIR CAN" substring match handles these directly, alias just for canonicalization
+  - match: '^AIR\s*CAN'
+    canonical: 'AIR CANADA'
+  - match: '^WESTJET\b'
+    canonical: 'WESTJET'
+
+  # --- Passport (bilingual statement variant) ---
+  - match: '^PASSPORT(/PASSEPORT)?\b'
+    canonical: 'PASSPORT'
+
+  # --- AL AIN FOOD (truncated on statement) ---
+  - match: '^AL\s+AIN\s+FOOD\s+AND\s+BEVERA\b'
+    canonical: 'AL AIN FOOD AND BEVERAGE'
+
+  # --- White Falcon (various spacings) ---
+  - match: '^WHITE\s+FALCON\b'
+    canonical: 'WHITE FALCON GENTS'
+
+  # --- Habtoor (spacing variants) ---
+  - match: '^AL\s+HABTOOR\b'
+    canonical: 'AL HABTOOR'
+
+  # --- Square / Toast POS noisy names ---
+  # After strip_prefixes removes "SQ*" and "TST-", these match what remains:
+  - match: '^WAGYURAMEN'          # SQ*WAGYURAMENGYUMONUEN -> WAGYURAMEN... -> WAGYU RAMEN
+    canonical: 'WAGYU RAMEN'
+  - match: '^SANKYU\b'
+    canonical: 'SANKYU JAPANESE'
+  - match: '^CAZBA\b'
+    canonical: 'CAZBA'
+  - match: '^RAIN\s+OR\s+SHINE\b'
+    canonical: 'RAIN OR SHINE'
+
+  # --- Japanese transit (long romanized names) ---
+  - match: '^SYOUTOKOUTUU\b'
+    canonical: 'SHOTOKU KOTSU'    # Japanese transit company
+  - match: '^SANWAKOTSUUKABUSHIKIGA\b'
+    canonical: 'SANWA KOTSU'      # Japanese taxi/transport company
+  - match: '^KAFUENEKOEMON\b'
+    canonical: 'KAFUNE KOEMON'    # Japanese restaurant
+  - match: '^ETSUGU\s+ON\b'
+    canonical: 'ETSUGU ON'
+
+  # --- Hospitals / clinics with noisy location suffixes ---
+  # "SHUROOQ HOSPIT NOMANI SHARJAH" — "SHARJAH" is 7 chars so city+country regex won't strip it
+  - match: '^SHUROOQ\s+HOSPIT\b'
+    canonical: 'SHUROOQ HOSPIT'
+
+  # --- Abu Dhabi ride-hailing (single letter "Q" is intentionally uncategorized) ---
+  - match: '^Q\s+MOBILITY\b'
+    canonical: 'Q MOBILITY'
+
+  # --- Numeric-prefixed merchants (POS system artifacts) ---
+  - match: '^1349'
+    canonical: '1349-CENTRAL UNITED'
+  - match: '^SP\s+DELID\b'
+    canonical: 'SP DELID TOOL'
+
+  # --- OpenAI subscription (noisy) ---
+  - match: '^OPENAI\s*\*?CHATGPT\b'
+    canonical: 'OPENAI CHATGPT'
+
+  # --- Bitget (noisy exchange suffix) ---
+  - match: '^BITGET\b'
+    canonical: 'BITGET'
+
+  # --- MAMO*PET -> PET BAE (prefix stripped above, remainder matched here) ---
+  - match: '^PET\s+BAE\b'
+    canonical: 'PET BAE'
+
+  # --- Mattress store (truncated) ---
+  - match: '^THE\s+MATTRESS\b'
+    canonical: 'THE MATTRESS STORE'
+
+  # --- Adore Beauty (variant spellings) ---
+  - match: '^ADO(RE)?\b.*BEAUTY\b'
+    canonical: 'ADORE BEAUTY'
+
+  # --- YAS BAY ARENA catering (must resolve before bare YAS BAY ARENA) ---
+  - match: '^YAS\s+BAY\s+ARENA\s+CATERING\b'
+    canonical: 'YAS BAY ARENA CATERING'
+
+  # --- Al Futtaim e-commerce ---
+  - match: '^AL\s+FUTTAIM\s+TRD\b'
+    canonical: 'AL FUTTAIM'
+
+  # --- Pull & Bear (spacing variant) ---
+  - match: '^PULL\s+AND\s+BEAR\b'
+    canonical: 'PULL & BEAR'
+
+  # --- Spinneys / Union Coop (prefix variants) ---
+  - match: '^SPINNEYS\b'
+    canonical: 'SPINNEYS'
+  - match: '^UNION\s+COOP\b'
+    canonical: 'UNION COOP'
+
+  # --- Japanese convenience stores ---
+  - match: '^LAWSON\b'
+    canonical: 'LAWSON'
+  - match: '^SEVEN[\s-]ELEVEN\b'
+    canonical: 'SEVEN-ELEVEN'
+
+  # --- JR Rail (Japan travel) ---
+  - match: '^JR\s+EAST\b'
+    canonical: 'JR EAST'
+  - match: '^JR\s+CENTRAL\b'
+    canonical: 'JR CENTRAL'
+
+  # --- Merchant aggregation: collapse location/reference suffixes to one canonical name ---
+
+  # Spotify appends a unique payment reference per charge (SPOTIFY AB P2D84C788C, etc.)
+  - match: '^SPOTIFY\b'
+    canonical: 'SPOTIFY'
+
+  # Airbnb appends booking reference codes (AIRBNB * HMSSRJKHTR 437-886-4409 GBR)
+  - match: '^AIRBNB\b'
+    canonical: 'AIRBNB'
+
+  # Starbucks: store numbers and country suffixes (STARBUCKS 04821 BURNABY CAN, STARBUCKS COFFEE JAPAN)
+  - match: '^STARBUCKS\b'
+    canonical: 'STARBUCKS'
+
+  # ADNOC fuel stations: location names appended (ADNOC AL QUOZ 2, ADNOC MEYDAN HEIGHT, etc.)
+  - match: '^ADNOC\b'
+    canonical: 'ADNOC'
+
+  # EMARAT fuel stations: location ids appended (EMARAT 7320 AL GHADEER, EMARAT 3780 ABU KADRA, etc.)
+  - match: '^EMARAT\b'
+    canonical: 'EMARAT'
+
+  # ENOC fuel stations: site ids appended (ENOC SITE, ENOC SITE 1161 SHARJAH)
+  - match: '^ENOC\b'
+    canonical: 'ENOC'
+
+  # Home Centre: legal entity variants (HOME CENTRE GULF, HOME CENTRE INTL)
+  - match: '^HOME\s+CENTRE\b'
+    canonical: 'HOME CENTRE'
+
+  # Prime Medical: name and entity variants (PRIME MEDICAL CENTER, PRIMECORP MEDICAL CENT)
+  - match: '^PRIME\s*(CORP\s*)?MEDICAL\b'
+    canonical: 'PRIME MEDICAL CENTRE'
+
+  # La Brioche: location suffixes (LA BRIOCHE AL, LA BRIOCHE-HILII MALL, LA BRIOCHE-MIRDIFF)
+  - match: '^LA\s+BRIOCHE\b'
+    canonical: 'LA BRIOCHE'
+
+  # Mamaesh: branch name concatenated without separator (MAMAESH, MAMAESHBUSINESSBAY)
+  - match: '^MAMAESH'
+    canonical: 'MAMAESH'
+
+  # Smoky Beach restaurant: location concatenated (SMOKY, SMOKYBEACH-DUBAI)
+  - match: '^SMOKY'
+    canonical: 'SMOKY'
+
+  # KFC: location suffixes (KFC SHARJAH, KFC DUBAI MALL ZABEEL, KFC ADNOC AL QUOZ)
+  - match: '^KFC\b'
+    canonical: 'KFC'
+
+  # Vox Cinemas: (VOX, VOX CINEMAS)
+  - match: '^VOX\b'
+    canonical: 'VOX CINEMAS'
+
+  # Roxy Cinema: location suffix (ROXY CINEMA, ROXY DUBAI HILLS)
+  - match: '^ROXY\b'
+    canonical: 'ROXY CINEMA'
+
+  # Talabat: country suffixes (TALABAT CAIRO EGY, TALABAT COM CAIRO EGY)
+  - match: '^TALABAT\b'
+    canonical: 'TALABAT'
+
+  # Real-Debrid: space vs hyphen variant (REAL DEBRID, REAL-DEBRID)
+  - match: '^REAL[\s-]DEBRID\b'
+    canonical: 'REAL-DEBRID'
+
+  # Al Kabayel: location/format variants (AL KABAYEL DISCOUNT CE DEIRA, BAIT AL KABAYEL TRADIN)
+  - match: '^(AL\s+KABAYEL|BAIT\s+AL\s+KABAYEL)\b'
+    canonical: 'AL KABAYEL TRADING'
+
+  # Life Pharmacy: store-number prefixes and name variants
+  # (1458 LIFE 11 PHARMACY, 1458-LIFE PHARMACY, 1516 LIFE, LIFE PHARMACY AND EXPR)
+  - match: '^\d+[\s-]LIFE\b'
+    canonical: 'LIFE PHARMACY'
+  - match: '^LIFE\s+PHARMACY\b'
+    canonical: 'LIFE PHARMACY'
+
+  # Tim Hortons: store number suffixes (TIM HORTONS #2978, TIM HORTONS #3312)
+  - match: '^TIM\s+HORTONS\b'
+    canonical: 'TIM HORTONS'
+
+  # Daiso: Japan variant (DAISO, DAISO JAPAN VALUE STOR)
+  - match: '^DAISO\b'
+    canonical: 'DAISO'
+
+  # McDonald's: location suffixes and formatting variants
+  # (MCDONALDS-AL, MCDONALDS-NAD AL HAME, MCDONALD'S #8009 Q04 BURNABY CAN)
+  - match: '^MCDONALD'
+    canonical: 'MCDONALDS'
+
+  # Uber trip vs Uber Canada/UberTrip (taxi)
+  - match: '^UBER\s+(\*TRIP|CANADA/UBERTRIP)\b'
+    canonical: 'UBER'
+
+  # Uber Canada/UberEats (food delivery — separate from taxi rides)
+  - match: '^UBER\s+CANADA/UBEREATS\b'
+    canonical: 'UBEREATS'
+
+metrics:
+  top_merchants_per_month: 0

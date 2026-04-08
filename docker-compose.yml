@@ -1,0 +1,100 @@
+services:
+  budget-exporter:
+    image: budget-exporter:latest
+    build: .
+    container_name: budget-exporter
+    ports:
+      - "8000:8000"
+    environment:
+      DATA_DIR: /data
+      STATEMENTS_DIR: /data/statements
+      DB_PATH: /data/state.db
+      RULES_PATH: /app/rules.yaml
+      ML_MODEL_PATH: /models/categorizer.pkl
+      ML_TRAINER_URL: http://ml-trainer:8001
+      ML_CONFIDENCE_THRESHOLD: "0.4" # Auto apply category based on this percentage
+    volumes:
+      - ./data:/data
+      - ./models:/models
+    restart: unless-stopped
+
+  ml-trainer:
+    build: ./ml-trainer
+    container_name: ml-trainer
+    environment:
+      DB_PATH: /data/state.db
+      MODEL_PATH: /models/categorizer.pkl
+    volumes:
+      - ./data:/data
+      - ./models:/models
+    restart: unless-stopped
+
+  statement-fetcher:
+    build: ./fetcher
+    container_name: statement-fetcher
+    profiles: [fetcher]
+    environment:
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+      PDF_PASSWORD: ${PDF_PASSWORD:-}
+      DATA_DIR: /data
+      ACCOUNT_ROUTES: "credit card:statements,mastercard:statements,savings account:savings,current account:chequing"
+      EMAIL_SENDER_FILTER: "statement@emiratesnbd.com"
+      TOKEN_CACHE: /data/token_cache.json
+      BUDGET_API_URL: http://budget-exporter:8000
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - ./data:/data
+    depends_on:
+      - budget-exporter
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: budget-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - budget-exporter
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    profiles: [monitoring]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=90d"
+    depends_on:
+      - budget-exporter
+    restart: unless-stopped
+
+  grafana:
+    build: ./grafana
+    container_name: grafana
+    profiles: [monitoring]
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/budget-exporter.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  prometheus_data:
+  grafana_data:

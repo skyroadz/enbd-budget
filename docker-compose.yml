@@ -12,10 +12,12 @@ services:
       RULES_PATH: /app/rules.yaml
       ML_MODEL_PATH: /models/categorizer.pkl
       ML_TRAINER_URL: http://ml-trainer:8001
-      ML_CONFIDENCE_THRESHOLD: "0.4" # Auto apply category based on this percentage
+      ML_CONFIDENCE_THRESHOLD: "0.4"
     volumes:
       - ./data:/data
       - ./models:/models
+    networks:
+      - budget-net
     restart: unless-stopped
 
   ml-trainer:
@@ -27,6 +29,8 @@ services:
     volumes:
       - ./data:/data
       - ./models:/models
+    networks:
+      - budget-net
     restart: unless-stopped
 
   statement-fetcher:
@@ -45,6 +49,8 @@ services:
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     volumes:
       - ./data:/data
+    networks:
+      - budget-net
     depends_on:
       - budget-exporter
     restart: unless-stopped
@@ -56,6 +62,8 @@ services:
     container_name: budget-frontend
     ports:
       - "3000:80"
+    networks:
+      - budget-net
     depends_on:
       - budget-exporter
     restart: unless-stopped
@@ -73,6 +81,8 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=90d"
+    networks:
+      - budget-net
     depends_on:
       - budget-exporter
     restart: unless-stopped
@@ -91,6 +101,8 @@ services:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana:/var/lib/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
+    networks:
+      - budget-net
     depends_on:
       - prometheus
     restart: unless-stopped
@@ -98,3 +110,7 @@ services:
 volumes:
   prometheus_data:
   grafana_data:
+
+networks:
+  budget-net:
+    driver: bridge

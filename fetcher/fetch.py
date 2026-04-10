@@ -308,7 +308,7 @@ def fetch_emails_gmail() -> list[dict]:
     log.info(f"Found {len(messages)} Gmail message(s) matching query.")
 
     emails = []
-    for msg_ref in messages:
+    for i, msg_ref in enumerate(messages, 1):
         msg = service.users().messages().get(
             userId="me", id=msg_ref["id"], format="full"
         ).execute()
@@ -316,6 +316,7 @@ def fetch_emails_gmail() -> list[dict]:
         # Extract subject from headers
         headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
         subject = headers.get("Subject", "")
+        log.info(f"[{i}/{len(messages)}] {subject!r}")
 
         pdf_parts = _gmail_get_pdf_parts(msg.get("payload", {}))
         if not pdf_parts:

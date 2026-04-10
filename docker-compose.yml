@@ -12,12 +12,10 @@ services:
       RULES_PATH: /app/rules.yaml
       ML_MODEL_PATH: /models/categorizer.pkl
       ML_TRAINER_URL: http://ml-trainer:8001
-      ML_CONFIDENCE_THRESHOLD: "0.4"
+      ML_CONFIDENCE_THRESHOLD: "0.6" # Auto apply category based on this percentage
     volumes:
       - ./data:/data
       - ./models:/models
-    networks:
-      - budget-net
     restart: unless-stopped
 
   ml-trainer:
@@ -29,28 +27,32 @@ services:
     volumes:
       - ./data:/data
       - ./models:/models
-    networks:
-      - budget-net
     restart: unless-stopped
 
   statement-fetcher:
     build: ./fetcher
     container_name: statement-fetcher
     profiles: [fetcher]
+    ports:
+      - "8081:8081"  # Gmail OAuth redirect (only needed on first auth run)
     environment:
-      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+      MAIL_PROVIDER: ${MAIL_PROVIDER:-outlook}
       PDF_PASSWORD: ${PDF_PASSWORD:-}
       DATA_DIR: /data
       ACCOUNT_ROUTES: "credit card:statements,mastercard:statements,savings account:savings,current account:chequing"
-      EMAIL_SENDER_FILTER: "statement@emiratesnbd.com"
-      TOKEN_CACHE: /data/token_cache.json
+      EMAIL_SENDER_FILTER: ${EMAIL_SENDER_FILTER:-statement@emiratesnbd.com}
       BUDGET_API_URL: http://budget-exporter:8000
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      # Outlook-specific
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+      TOKEN_CACHE: /data/token_cache.json
+      # Gmail-specific
+      GOOGLE_CREDENTIALS_FILE: /data/gmail_credentials.json
+      GOOGLE_TOKEN_FILE: /data/gmail_token.json
+      GMAIL_AUTH_PORT: "8081"
     volumes:
       - ./data:/data
-    networks:
-      - budget-net
     depends_on:
       - budget-exporter
     restart: unless-stopped
@@ -62,8 +64,6 @@ services:
     container_name: budget-frontend
     ports:
       - "3000:80"
-    networks:
-      - budget-net
     depends_on:
       - budget-exporter
     restart: unless-stopped
@@ -81,8 +81,6 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=90d"
-    networks:
-      - budget-net
     depends_on:
       - budget-exporter
     restart: unless-stopped
@@ -101,8 +99,6 @@ services:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana:/var/lib/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
-    networks:
-      - budget-net
     depends_on:
       - prometheus
     restart: unless-stopped
@@ -110,7 +106,3 @@ services:
 volumes:
   prometheus_data:
   grafana_data:
-
-networks:
-  budget-net:
-    driver: bridge

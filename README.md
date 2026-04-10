@@ -1,6 +1,6 @@
 # Budget Exporter
 
-Self-hosted personal finance tracker for **Emirates NBD** customers. Parses PDF statements, categorises spending via ML, and serves a React dashboard with optional Prometheus/Grafana monitoring. Statements can be placed manually or fetched automatically from Outlook (optional).
+Self-hosted personal finance tracker for **Emirates NBD** customers. Parses PDF statements, categorises spending via ML, and serves a React dashboard with optional Prometheus/Grafana monitoring. Statements can be placed manually or fetched automatically from Outlook or Gmail (optional).
 
 **Supported statements**
 
@@ -18,7 +18,7 @@ Self-hosted personal finance tracker for **Emirates NBD** customers. Parses PDF 
 ## How It Works
 
 ### Statement fetcher *(optional)*
-Enabled via the `fetcher` profile. Runs on a cron schedule (daily, 10am). Authenticates with Microsoft Graph via device-code flow, downloads ENBD PDFs, unlocks them with your PDF password, routes them to the right directory, and triggers backend ingestion. Without it, drop PDFs manually into the appropriate `data/` subdirectory.
+Enabled via the `fetcher` profile. Runs on a cron schedule (daily, 10am). Connects to either Outlook (Microsoft Graph) or Gmail, downloads ENBD PDFs, unlocks them with your PDF password, routes them to the right directory, and triggers backend ingestion. Without it, drop PDFs manually into the appropriate `data/` subdirectory.
 
 ### Backend ingestion
 Scans statement directories for new/changed PDFs on every `/metrics` request or `POST /admin/recategorize`. Parses transactions, cleans merchant names, then sends them to the ML model for categorisation.
@@ -37,9 +37,7 @@ Prometheus scrapes `/metrics` every 30 seconds. Two pre-built Grafana dashboards
 
 ### Prerequisites
 - Docker 24+ with Compose v2
-- An Azure app registration with `Mail.Read` on a personal Microsoft account to retrieve statements from your email (Optional)
-
-> **Azure setup (one-time):** Register an app at portal.azure.com → API permissions → Microsoft Graph → Delegated → `Mail.Read`. Under Authentication, enable **Allow public client flows**.
+- A mail provider configured to receive ENBD statements (Outlook or Gmail)
 
 ### 1. Clone & configure
 
@@ -47,15 +45,22 @@ Prometheus scrapes `/metrics` every 30 seconds. Two pre-built Grafana dashboards
 git clone <repo-url> budget-exporter && cd budget-exporter
 ```
 
-Create `.env`:
-```env
-# Optional
-AZURE_CLIENT_ID=your-azure-client-id
-PDF_PASSWORD=your-pdf-password        # usually your DOB as DDMMYYYY
+Create `.env` from the example:
+```bash
+cp .env-example .env
+```
 
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_CHAT_ID=
+Edit `.env`:
+```env
+PDF_PASSWORD=your-pdf-password        # usually your DOB as DDMMYYYY
+MAIL_PROVIDER=gmail                   # or "outlook"
+
+TELEGRAM_BOT_TOKEN=                   # optional
+TELEGRAM_CHAT_ID=                     # optional
 GRAFANA_PASSWORD=admin                # change this
+
+# Override sender filter if forwarding emails (see fetcher setup below)
+EMAIL_SENDER_FILTER=
 ```
 
 ### 2. Create data directories
@@ -66,7 +71,7 @@ mkdir -p data/statements data/savings data/chequing data/loans
 
 ### 3. Start services
 
-**Core only** (place PDFs manually — `data/statements` for credit card, `data/chequing` for chequing account, `data/savings` for savings account):
+**Core only** (place PDFs manually — `data/statements` for credit card, `data/chequing` for chequing, `data/savings` for savings):
 ```bash
 docker compose up --build -d
 ```
@@ -94,13 +99,54 @@ docker compose --profile fetcher --profile monitoring up --build -d
 | Prometheus | http://localhost:9090 | `monitoring` |
 | Statement fetcher | *(no port)* | `fetcher` |
 
-### 4. Authenticate the fetcher (one-time, fetcher profile only)
+---
 
-```bash
-docker compose --profile fetcher run --rm statement-fetcher python fetch.py
-```
+## Statement Fetcher Setup
 
-Follow the device-code prompt in your browser. The token is cached in `data/token_cache.json` and refreshes automatically.
+### Option A — Gmail
+
+1. **Enable the Gmail API** in [Google Cloud Console](https://console.cloud.google.com/) → APIs & Services → Enable APIs → Gmail API.
+
+2. **Create OAuth credentials:** APIs & Services → Credentials → Create Credentials → OAuth client ID → type: **Desktop app**. Download the JSON.
+
+3. **Add yourself as a test user:** OAuth consent screen → Test users → Add your Gmail address. (Required while the app is in testing mode.)
+
+4. **Place the credentials file:**
+   ```bash
+   cp ~/Downloads/client_secret_*.json data/gmail_credentials.json
+   ```
+
+5. **Set the sender filter** in `.env`. If you're forwarding ENBD statements from another inbox, the `From:` address will be your forwarding address, not `statement@emiratesnbd.com`:
+   ```env
+   MAIL_PROVIDER=gmail
+   EMAIL_SENDER_FILTER=you@outlook.com   # address the forwarded emails arrive from
+   ```
+   If ENBD emails land in Gmail directly, leave `EMAIL_SENDER_FILTER` unset (defaults to `statement@emiratesnbd.com`).
+
+6. **Authenticate (one-time):**
+   ```bash
+   docker compose --profile fetcher build statement-fetcher
+   docker compose --profile fetcher run --rm --service-ports statement-fetcher python /app/fetch.py
+   ```
+   Open the printed URL in an **incognito window**, complete the Google sign-in, and allow access. The token is saved to `data/gmail_token.json` and refreshes automatically — you will not need to repeat this step.
+
+---
+
+### Option B — Outlook
+
+1. **Register an Azure app:** [portal.azure.com](https://portal.azure.com) → App registrations → New registration. Under API permissions add Microsoft Graph → Delegated → `Mail.Read`. Under Authentication enable **Allow public client flows**.
+
+2. **Set env vars** in `.env`:
+   ```env
+   MAIL_PROVIDER=outlook
+   AZURE_CLIENT_ID=your-azure-client-id
+   ```
+
+3. **Authenticate (one-time):**
+   ```bash
+   docker compose --profile fetcher run --rm statement-fetcher python /app/fetch.py
+   ```
+   Follow the device-code prompt. The token is cached in `data/token_cache.json` and refreshes automatically.
 
 ---
 
@@ -114,10 +160,6 @@ Categorisation is handled entirely by the ML model. New transactions are auto-ca
 - Trigger a model retrain after labelling new data
 
 The more you label, the better the model gets. Locked transactions are never overwritten by retrains.
-
-**Priority (highest → lowest):**
-1. ML model prediction (if confidence ≥ threshold)
-2. `"uncategorized"` fallback
 
 ---
 
@@ -150,8 +192,8 @@ Default login: `admin` / value of `GRAFANA_PASSWORD` (default: `admin`).
 ## Useful Commands
 
 ```bash
-# Fetch statements now
-docker compose run --rm statement-fetcher python fetch.py
+# Fetch statements now (run once interactively)
+docker compose --profile fetcher run --rm statement-fetcher python /app/fetch.py
 
 # Force re-ingest + re-categorise
 curl -X POST http://localhost:8000/admin/recategorize
@@ -164,7 +206,7 @@ docker compose build --no-cache budget-exporter && docker compose up -d budget-e
 
 # Tail logs
 docker compose logs -f budget-exporter
-docker compose logs -f grafana
+docker compose logs -f statement-fetcher
 
 # Backup the database
 cp data/state.db data/state.db.bak
@@ -178,7 +220,7 @@ cp data/state.db data/state.db.bak
 budget-exporter/
 ├── app/                    # FastAPI backend (ingestion, rules, API routes)
 ├── parsers/                # Bank-specific PDF parsers (ENBD, ADIB)
-├── fetcher/                # Statement downloader (Graph API + Telegram)
+├── fetcher/                # Statement downloader (Outlook/Gmail + Telegram)
 ├── ml-trainer/             # scikit-learn training + prediction service
 ├── frontend/               # React 18 + Vite + Tailwind dashboard
 ├── grafana/

@@ -255,8 +255,9 @@ def fetch_emails_outlook() -> list[dict]:
     log.info(f"Found {len(raw_emails)} Outlook email(s) with attachments.")
 
     emails = []
-    for email in raw_emails:
+    for i, email in enumerate(raw_emails, 1):
         subject = email.get("subject", "")
+        log.info(f"[{i}/{len(raw_emails)}] {subject!r}")
         att_data = graph_get(
             token,
             f"https://graph.microsoft.com/v1.0/me/messages/{email['id']}/attachments",
@@ -370,7 +371,7 @@ def main():
         subject = email["subject"]
         dest_dir = dest_dir_for_subject(subject)
         if dest_dir is None:
-            log.info(f"Skipping unrecognised subject: {subject!r}")
+            log.info(f"  → Skipping: no matching route")
             continue
 
         for att in email["attachments"]:
